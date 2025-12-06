@@ -1,6 +1,6 @@
 # HCS Sandbox
 
-Low-level Windows sandbox orchestrator using Host Compute Service (HCS) APIs - the same APIs that power Windows Sandbox and Docker on Windows.
+Kubernetes experience for Windows computer use agents based on Host Compute Service (HCS) APIs - the same APIs that power Windows Sandbox and Docker on Windows.
 
 ## Features
 
