@@ -2,7 +2,8 @@
 
 use clap::{Parser, Subcommand};
 use hyperv_kube::models::*;
-use hyperv_kube::{Orchestrator, OrchestratorConfig, Result};
+use hyperv_kube::{Orchestrator, OrchestratorConfig, Result, Server};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use tabled::{Table, Tabled};
 
@@ -38,6 +39,15 @@ enum Commands {
     },
     /// Sync state with Hyper-V
     Reconcile,
+    /// Start HTTP API server
+    Serve {
+        /// Host to bind to
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -235,6 +245,30 @@ async fn main() -> Result<()> {
             println!("Reconciling state with Hyper-V...");
             orch.reconcile()?;
             println!("Done.");
+        }
+        Commands::Serve { host, port } => {
+            let addr: SocketAddr = format!("{}:{}", host, port).parse()
+                .expect("Invalid address");
+
+            println!("Starting API server on http://{}", addr);
+            println!();
+            println!("Endpoints:");
+            println!("  GET  /health                    Health check");
+            println!("  GET  /api/v1/templates          List templates");
+            println!("  POST /api/v1/templates          Create template");
+            println!("  GET  /api/v1/pools              List pools");
+            println!("  POST /api/v1/pools              Create pool");
+            println!("  GET  /api/v1/pools/:name        Pool status");
+            println!("  POST /api/v1/pools/:name/provision  Provision VMs");
+            println!("  GET  /api/v1/vms                List VMs");
+            println!("  POST /api/v1/vms/:name/resume   Resume VM (fast!)");
+            println!("  POST /api/v1/vms/:name/save     Save VM state");
+            println!("  POST /api/v1/acquire            Acquire VM from pool");
+            println!("  POST /api/v1/vms/:name/release  Release VM to pool");
+            println!();
+
+            let server = Server::new(orch, addr);
+            server.run().await.map_err(|e| hyperv_kube::Error::Other(e.to_string()))?;
         }
     }
 

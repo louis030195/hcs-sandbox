@@ -40,11 +40,13 @@
 //! # Ok::<(), hyperv_kube::Error>(())
 //! ```
 
+pub mod api;
 pub mod db;
 pub mod error;
 pub mod hyperv;
 pub mod models;
 pub mod orchestrator;
 
+pub use api::Server;
 pub use error::{Error, Result};
 pub use orchestrator::{Orchestrator, OrchestratorConfig};
