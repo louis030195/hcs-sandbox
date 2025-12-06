@@ -29,8 +29,18 @@ impl ComputeSystem {
                 None,
             )?;
 
-            // Get any result/error info
-            let _ = operation.get_result();
+            // Wait for create operation to complete
+            match operation.wait_and_get_result() {
+                Ok(result) => {
+                    if !result.is_empty() {
+                        eprintln!("Create result: {}", result);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Create operation failed: {}", e);
+                    return Err(e);
+                }
+            }
 
             Ok(Self {
                 handle,
@@ -65,7 +75,24 @@ impl ComputeSystem {
                 operation.handle(),
                 PCWSTR::null(),
             )?;
-            Ok(())
+            // Wait for the operation to complete and check for errors
+            let result = operation.wait_and_get_result();
+            match &result {
+                Ok(s) if !s.is_empty() => {
+                    eprintln!("Start operation result: {}", s);
+                }
+                Err(e) => {
+                    eprintln!("Start operation error: {}", e);
+                    // Try to get any result document that might have error details
+                    if let Ok(details) = operation.get_result() {
+                        if !details.is_empty() {
+                            eprintln!("Error details: {}", details);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            result.map(|_| ())
         }
     }
 

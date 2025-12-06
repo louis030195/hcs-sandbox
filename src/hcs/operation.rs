@@ -48,9 +48,9 @@ impl Operation {
     pub fn wait_and_get_result(&self) -> Result<String> {
         unsafe {
             let mut result_doc: PWSTR = PWSTR::null();
-            
+
             // HcsWaitForOperationResult waits for completion
-            HcsWaitForOperationResult(self.handle, u32::MAX, Some(&mut result_doc))?;
+            let hr = HcsWaitForOperationResult(self.handle, u32::MAX, Some(&mut result_doc));
 
             let result = if !result_doc.is_null() {
                 let s = result_doc.to_string().unwrap_or_default();
@@ -59,6 +59,14 @@ impl Operation {
             } else {
                 String::new()
             };
+
+            // Return the result even if there's an error, to get error details
+            if let Err(e) = hr {
+                if !result.is_empty() {
+                    eprintln!("Operation failed with details: {}", result);
+                }
+                return Err(crate::Error::Windows(e));
+            }
 
             Ok(result)
         }
