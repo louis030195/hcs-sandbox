@@ -15,6 +15,8 @@ pub struct SandboxConfig {
     pub printer_enabled: bool,
     pub startup_command: Option<String>,
     pub writable_layer_path: Option<String>,
+    pub base_layer_path: Option<String>,
+    pub sandbox_layer_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +25,9 @@ pub struct MappedFolder {
     pub sandbox_path: String,
     pub read_only: bool,
 }
+
+/// Default base layer path used by Windows Sandbox
+pub const DEFAULT_BASE_LAYER: &str = r"C:\ProgramData\Microsoft\Windows\Containers\Layers";
 
 impl Default for SandboxConfig {
     fn default() -> Self {
@@ -38,6 +43,8 @@ impl Default for SandboxConfig {
             printer_enabled: false,
             startup_command: None,
             writable_layer_path: None,
+            base_layer_path: None,
+            sandbox_layer_path: None,
         }
     }
 }
@@ -61,7 +68,7 @@ impl SandboxConfig {
     }
 
     pub fn to_hcs_config(&self) -> serde_json::Value {
-        let pipe_name = format!(r"\.\pipe\hcs-sandbox-{}", &self.name);
+        let pipe_name = format!(r"\\.\pipe\hcs-sandbox-{}", &self.name);
         let mut devices = serde_json::json!({
             "VideoMonitor": {},
             "Keyboard": {},
@@ -97,6 +104,300 @@ impl SandboxConfig {
                 },
                 "Devices": devices,
                 "GuestState": { "GuestStateFilePath": "", "RuntimeStateFilePath": "" }
+            }
+        })
+    }
+
+    /// Generate HCS config with storage layers for container isolation
+    pub fn to_hcs_container_config(&self, base_layer_id: &str, sandbox_vhdx_path: &str) -> serde_json::Value {
+        let base_layer_path = format!(r"{}\{}", DEFAULT_BASE_LAYER, base_layer_id);
+
+        serde_json::json!({
+            "SchemaVersion": { "Major": 2, "Minor": 1 },
+            "Owner": "hcs-sandbox",
+            "ShouldTerminateOnLastHandleClosed": true,
+            "HostingSystemId": "",
+            "Container": {
+                "Storage": {
+                    "Layers": [
+                        {
+                            "Id": base_layer_id,
+                            "Path": base_layer_path,
+                            "PathType": "AbsolutePath"
+                        }
+                    ],
+                    "Path": sandbox_vhdx_path
+                },
+                "MappedDirectories": self.mapped_folders.iter().map(|f| {
+                    serde_json::json!({
+                        "HostPath": f.host_path,
+                        "ContainerPath": f.sandbox_path,
+                        "ReadOnly": f.read_only
+                    })
+                }).collect::<Vec<_>>(),
+                "Networking": {
+                    "AllowUnqualifiedDnsQuery": true
+                }
+            }
+        })
+    }
+
+    /// Generate HCS config for Hyper-V isolated container (full VM with container storage)
+    pub fn to_hcs_hyperv_config(&self, base_layer_id: &str, sandbox_vhdx_path: &str) -> serde_json::Value {
+        let base_layer_path = format!(r"{}\{}", DEFAULT_BASE_LAYER, base_layer_id);
+        let pipe_name = format!(r"\\.\pipe\hcs-sandbox-{}", &self.name);
+
+        let mut devices = serde_json::json!({
+            "Scsi": {
+                "0": {
+                    "Attachments": {
+                        "0": {
+                            "Path": sandbox_vhdx_path,
+                            "Type": "VirtualDisk"
+                        }
+                    }
+                }
+            },
+            "VideoMonitor": {},
+            "Keyboard": {},
+            "Mouse": {},
+            "EnhancedModeVideo": {
+                "ConnectionOptions": {
+                    "AccessName": &self.name,
+                    "NamedPipe": pipe_name
+                }
+            }
+        });
+
+        if self.gpu_enabled {
+            devices["Gpu"] = serde_json::json!({
+                "AllowVendorExtension": true
+            });
+        }
+
+        if self.clipboard_enabled {
+            devices["Clipboard"] = serde_json::json!({});
+        }
+
+        serde_json::json!({
+            "SchemaVersion": { "Major": 2, "Minor": 1 },
+            "Owner": "hcs-sandbox",
+            "ShouldTerminateOnLastHandleClosed": true,
+            "VirtualMachine": {
+                "StopOnReset": true,
+                "Chipset": { "UseUtc": true },
+                "ComputeTopology": {
+                    "Memory": {
+                        "SizeInMB": self.memory_mb,
+                        "AllowOvercommit": true,
+                        "EnableDeferredCommit": true
+                    },
+                    "Processor": { "Count": self.cpu_count }
+                },
+                "Devices": devices,
+                "GuestState": {
+                    "GuestStateFilePath": "",
+                    "RuntimeStateFilePath": ""
+                },
+                "Storage": {
+                    "Layers": [
+                        {
+                            "Id": base_layer_id,
+                            "Path": base_layer_path,
+                            "PathType": "AbsolutePath"
+                        }
+                    ]
+                }
+            }
+        })
+    }
+
+    /// Generate HCS config for fresh boot (VHDX only, no saved guest state)
+    /// This is the WORKING configuration - requires HvSocket device!
+    pub fn to_hcs_fresh_config(&self, sandbox_storage_path: &str, _base_layer_id: &str) -> serde_json::Value {
+        let sandbox_vhdx = format!(r"{}\sandbox.vhdx", sandbox_storage_path);
+        let pipe_name = format!(r"\\.\pipe\hcs-sandbox-{}", &self.name);
+
+        let mut devices = serde_json::json!({
+            "Scsi": {
+                "0": {
+                    "Attachments": {
+                        "0": {
+                            "Path": sandbox_vhdx,
+                            "Type": "VirtualDisk"
+                        }
+                    }
+                }
+            },
+            "HvSocket": {},  // REQUIRED for VM to start!
+            "VideoMonitor": {},
+            "Keyboard": {},
+            "Mouse": {},
+            "EnhancedModeVideo": {
+                "ConnectionOptions": {
+                    "AccessName": &self.name,
+                    "NamedPipe": pipe_name
+                }
+            }
+        });
+
+        if self.gpu_enabled {
+            devices["Gpu"] = serde_json::json!({
+                "AllowVendorExtension": true
+            });
+        }
+
+        if self.clipboard_enabled {
+            devices["Clipboard"] = serde_json::json!({});
+        }
+
+        serde_json::json!({
+            "SchemaVersion": { "Major": 2, "Minor": 1 },
+            "Owner": "hcs-sandbox",
+            "ShouldTerminateOnLastHandleClosed": false,
+            "VirtualMachine": {
+                "StopOnReset": true,
+                "Chipset": {
+                    "UseUtc": true,
+                    "Uefi": {
+                        "BootThis": {
+                            "DeviceType": "ScsiDrive",
+                            "DevicePath": "Scsi(0,0)"
+                        }
+                    }
+                },
+                "ComputeTopology": {
+                    "Memory": {
+                        "SizeInMB": self.memory_mb,
+                        "AllowOvercommit": true,
+                        "EnableDeferredCommit": true,
+                        "EnableHotHint": true
+                    },
+                    "Processor": { "Count": self.cpu_count }
+                },
+                "Devices": devices,
+                "GuestState": {
+                    "GuestStateFilePath": "",
+                    "RuntimeStateFilePath": ""
+                }
+            }
+        })
+    }
+
+    /// Generate minimal HCS config for testing (absolute minimum)
+    pub fn to_hcs_minimal_config(&self, sandbox_vhdx_path: &str) -> serde_json::Value {
+        // Minimal VM config - just memory, processor, and boot disk
+        serde_json::json!({
+            "SchemaVersion": { "Major": 2, "Minor": 1 },
+            "Owner": "hcs-sandbox",
+            "ShouldTerminateOnLastHandleClosed": false,
+            "VirtualMachine": {
+                "StopOnReset": true,
+                "Chipset": {
+                    "Uefi": {
+                        "BootThis": {
+                            "DeviceType": "ScsiDrive",
+                            "DevicePath": "Scsi(0,0)"
+                        }
+                    }
+                },
+                "ComputeTopology": {
+                    "Memory": { "SizeInMB": self.memory_mb },
+                    "Processor": { "Count": self.cpu_count }
+                },
+                "Devices": {
+                    "Scsi": {
+                        "0": {
+                            "Attachments": {
+                                "0": {
+                                    "Path": sandbox_vhdx_path,
+                                    "Type": "VirtualDisk"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Generate HCS config using existing sandbox storage (VHDX + VMGS)
+    pub fn to_hcs_clone_config(&self, sandbox_storage_path: &str, base_layer_id: &str) -> serde_json::Value {
+        let base_layer_path = format!(r"{}\{}", DEFAULT_BASE_LAYER, base_layer_id);
+        let sandbox_vhdx = format!(r"{}\sandbox.vhdx", sandbox_storage_path);
+        let sandbox_vmgs = format!(r"{}\sandbox.vmgs", sandbox_storage_path);
+        let pipe_name = format!(r"\\.\pipe\hcs-sandbox-{}", &self.name);
+
+        let mut devices = serde_json::json!({
+            "Scsi": {
+                "0": {
+                    "Attachments": {
+                        "0": {
+                            "Path": sandbox_vhdx,
+                            "Type": "VirtualDisk"
+                        }
+                    }
+                }
+            },
+            "VideoMonitor": {},
+            "Keyboard": {},
+            "Mouse": {},
+            "EnhancedModeVideo": {
+                "ConnectionOptions": {
+                    "AccessName": &self.name,
+                    "NamedPipe": pipe_name
+                }
+            }
+        });
+
+        if self.gpu_enabled {
+            devices["Gpu"] = serde_json::json!({
+                "AllowVendorExtension": true
+            });
+        }
+
+        if self.clipboard_enabled {
+            devices["Clipboard"] = serde_json::json!({});
+        }
+
+        serde_json::json!({
+            "SchemaVersion": { "Major": 2, "Minor": 1 },
+            "Owner": "hcs-sandbox",
+            "ShouldTerminateOnLastHandleClosed": false,
+            "VirtualMachine": {
+                "StopOnReset": true,
+                "Chipset": {
+                    "UseUtc": true,
+                    "Uefi": {
+                        "BootThis": {
+                            "DeviceType": "ScsiDrive",
+                            "DevicePath": "Scsi(0,0)"
+                        }
+                    }
+                },
+                "ComputeTopology": {
+                    "Memory": {
+                        "SizeInMB": self.memory_mb,
+                        "AllowOvercommit": true,
+                        "EnableDeferredCommit": true,
+                        "EnableHotHint": true
+                    },
+                    "Processor": { "Count": self.cpu_count }
+                },
+                "Devices": devices,
+                "GuestState": {
+                    "GuestStateFilePath": sandbox_vmgs,
+                    "RuntimeStateFilePath": ""
+                },
+                "Storage": {
+                    "Layers": [
+                        {
+                            "Id": base_layer_id,
+                            "Path": base_layer_path,
+                            "PathType": "AbsolutePath"
+                        }
+                    ]
+                }
             }
         })
     }
