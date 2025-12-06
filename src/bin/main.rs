@@ -1,8 +1,7 @@
 //! HCS Sandbox CLI
 
 use clap::{Parser, Subcommand};
-use hcs_sandbox::{Orchestrator, SandboxConfig, SandboxState};
-use hcs_sandbox::orchestrator::OrchestratorConfig;
+use hcs_sandbox::SandboxConfig;
 use hcs_sandbox::hcs::compute;
 
 #[derive(Parser)]
@@ -15,7 +14,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new sandbox
+    /// Create a new sandbox (raw HCS - requires base OS layer)
     Create {
         /// Sandbox name
         #[arg(short, long)]
@@ -49,6 +48,27 @@ enum Commands {
     },
     /// Show HCS service info
     Info,
+    /// Launch Windows Sandbox with custom config (easy mode - works out of the box)
+    Run {
+        /// Memory in MB (default: 4096)
+        #[arg(short, long, default_value = "4096")]
+        memory: u64,
+        /// Disable GPU (vGPU)
+        #[arg(long)]
+        no_gpu: bool,
+        /// Disable networking
+        #[arg(long)]
+        no_network: bool,
+        /// Map a host folder into sandbox (format: host_path or host_path:sandbox_path)
+        #[arg(short, long)]
+        folder: Option<String>,
+        /// Command to run on startup
+        #[arg(short, long)]
+        cmd: Option<String>,
+        /// Keep .wsb config file after sandbox closes
+        #[arg(long)]
+        keep_config: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,6 +92,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::Info) => {
             cmd_info()?;
+        }
+        Some(Commands::Run { memory, no_gpu, no_network, folder, cmd, keep_config }) => {
+            cmd_run(memory, !no_gpu, !no_network, folder, cmd, keep_config)?;
         }
         None => {
             cmd_info()?;
@@ -235,11 +258,106 @@ fn cmd_info() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n[*] Usage:");
+    println!("    hcs-sandbox run [--memory <mb>] [--folder <path>] [--cmd <command>]");
     println!("    hcs-sandbox create --name <name> [--memory <mb>] [--cpus <n>]");
     println!("    hcs-sandbox list");
     println!("    hcs-sandbox start <name>");
     println!("    hcs-sandbox stop <name>");
     println!("    hcs-sandbox destroy <name>");
+    println!("");
+    println!("    'run' uses Windows Sandbox (easy mode, works out of the box)");
+    println!("    'create' uses raw HCS API (requires base OS layer setup)");
+
+    Ok(())
+}
+
+fn cmd_run(
+    memory: u64,
+    gpu: bool,
+    network: bool,
+    folder: Option<String>,
+    cmd: Option<String>,
+    keep_config: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Launching Windows Sandbox...");
+    println!("  Memory: {} MB", memory);
+    println!("  GPU: {}", if gpu { "enabled" } else { "disabled" });
+    println!("  Network: {}", if network { "enabled" } else { "disabled" });
+
+    // Build .wsb XML config
+    let mut wsb = String::from("<Configuration>\n");
+
+    // vGPU (GPU passthrough)
+    wsb.push_str(&format!("  <VGpu>{}</VGpu>\n", if gpu { "Enable" } else { "Disable" }));
+
+    // Networking
+    wsb.push_str(&format!("  <Networking>{}</Networking>\n", if network { "Default" } else { "Disable" }));
+
+    // Memory (in MB)
+    wsb.push_str(&format!("  <MemoryInMB>{}</MemoryInMB>\n", memory));
+
+    // Mapped folders
+    if let Some(ref folder_spec) = folder {
+        let (host_path, sandbox_path) = if folder_spec.contains(':') && folder_spec.chars().nth(1) != Some(':') {
+            // Format: host_path:sandbox_path (but not C:\path)
+            let parts: Vec<&str> = folder_spec.splitn(2, ':').collect();
+            (parts[0].to_string(), Some(parts[1].to_string()))
+        } else if folder_spec.len() > 2 && folder_spec.chars().nth(1) == Some(':') && folder_spec.contains("::") {
+            // Handle Windows paths like C:\foo::C:\Users\...
+            let parts: Vec<&str> = folder_spec.splitn(2, "::").collect();
+            (parts[0].to_string(), Some(parts[1].to_string()))
+        } else {
+            (folder_spec.clone(), None)
+        };
+
+        wsb.push_str("  <MappedFolders>\n");
+        wsb.push_str("    <MappedFolder>\n");
+        wsb.push_str(&format!("      <HostFolder>{}</HostFolder>\n", host_path));
+        if let Some(sandbox) = sandbox_path {
+            wsb.push_str(&format!("      <SandboxFolder>{}</SandboxFolder>\n", sandbox));
+        }
+        wsb.push_str("      <ReadOnly>false</ReadOnly>\n");
+        wsb.push_str("    </MappedFolder>\n");
+        wsb.push_str("  </MappedFolders>\n");
+        println!("  Mapped: {}", folder_spec);
+    }
+
+    // Startup command
+    if let Some(ref command) = cmd {
+        wsb.push_str("  <LogonCommand>\n");
+        wsb.push_str(&format!("    <Command>{}</Command>\n", command));
+        wsb.push_str("  </LogonCommand>\n");
+        println!("  Startup: {}", command);
+    }
+
+    wsb.push_str("</Configuration>\n");
+
+    // Write to temp file
+    let temp_dir = std::env::temp_dir();
+    let wsb_path = temp_dir.join(format!("hcs-sandbox-{}.wsb", std::process::id()));
+    std::fs::write(&wsb_path, &wsb)?;
+
+    println!("\nConfig file: {}", wsb_path.display());
+    println!("\n--- WSB Config ---");
+    println!("{}", wsb);
+    println!("------------------\n");
+
+    // Launch Windows Sandbox
+    println!("Starting WindowsSandbox.exe...");
+    let status = std::process::Command::new("WindowsSandbox.exe")
+        .arg(&wsb_path)
+        .status()?;
+
+    // Cleanup
+    if !keep_config {
+        let _ = std::fs::remove_file(&wsb_path);
+    }
+
+    if status.success() {
+        println!("Windows Sandbox launched successfully!");
+    } else {
+        println!("Windows Sandbox exited with: {:?}", status.code());
+    }
 
     Ok(())
 }
