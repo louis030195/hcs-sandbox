@@ -1,0 +1,15 @@
+name: CI
+
+on:
+  push:
+    branches: [main, hyperv-impl]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+      - run: cargo build --release
