@@ -1,4 +1,4 @@
-//! Error types for HCS Sandbox
+//! Error types for HCS Kube
 
 use thiserror::Error;
 
@@ -39,6 +39,18 @@ pub enum Error {
 
     #[error("Hyper-V not available - enable Hyper-V and Containers features")]
     HyperVNotAvailable,
+
+    #[error("No sandbox available in pool")]
+    NoSandboxAvailable,
+
+    #[error("Pool not found: {0}")]
+    PoolNotFound(String),
+
+    #[error("HvSocket error: {0}")]
+    HvSocket(String),
+
+    #[error("Agent communication timeout")]
+    AgentTimeout,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

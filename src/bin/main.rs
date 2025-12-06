@@ -1,8 +1,8 @@
 //! HCS Sandbox CLI
 
 use clap::{Parser, Subcommand};
-use hcs_sandbox::SandboxConfig;
-use hcs_sandbox::hcs::compute;
+use hcs_kube::SandboxConfig;
+use hcs_kube::hcs::compute;
 use std::path::Path;
 
 #[derive(Parser)]
@@ -122,6 +122,33 @@ enum Commands {
         #[arg(short, long)]
         name: String,
     },
+    /// Connect to sandbox agent and send commands
+    Agent {
+        /// Sandbox IP or hostname (use 'localhost' for testing)
+        #[arg(short, long)]
+        host: String,
+        /// Port (default: 9999)
+        #[arg(short, long, default_value = "9999")]
+        port: u16,
+        /// Command to send: ping, screenshot, session, launch
+        #[arg(short, long)]
+        cmd: String,
+        /// Output file for screenshot
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Launch sandbox with agent-enabled VHDX (includes networking)
+    LaunchAgent {
+        /// Sandbox name (must be unique)
+        #[arg(short, long)]
+        name: String,
+        /// Path to agent-enabled VHDX
+        #[arg(short = 'v', long, default_value = r"C:\HcsSandboxes\agent-sandbox.vhdx")]
+        vhdx: String,
+        /// Memory in MB (default: 4096)
+        #[arg(short, long, default_value = "4096")]
+        memory: u64,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -167,6 +194,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Test { name }) => {
             cmd_test(&name)?;
         }
+        Some(Commands::Agent { host, port, cmd, output }) => {
+            cmd_agent(&host, port, &cmd, output)?;
+        }
+        Some(Commands::LaunchAgent { name, vhdx, memory }) => {
+            cmd_launch_agent(&name, &vhdx, memory)?;
+        }
         None => {
             cmd_info()?;
         }
@@ -198,7 +231,7 @@ fn cmd_create(name: &str, memory: u64, cpus: u32, gpu: bool) -> Result<(), Box<d
     // Try to create the compute system
     println!("\nCreating HCS compute system...");
     
-    match hcs_sandbox::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
+    match hcs_kube::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
         Ok(cs) => {
             println!("Created compute system: {}", cs.id());
             println!("\nNote: Sandbox created but not started.");
@@ -217,7 +250,7 @@ fn cmd_create(name: &str, memory: u64, cpus: u32, gpu: bool) -> Result<(), Box<d
 fn cmd_start(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting sandbox '{}'...", name);
     
-    match hcs_sandbox::hcs::ComputeSystem::open(name) {
+    match hcs_kube::hcs::ComputeSystem::open(name) {
         Ok(cs) => {
             cs.start()?;
             println!("Sandbox '{}' started!", name);
@@ -233,7 +266,7 @@ fn cmd_start(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_stop(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Stopping sandbox '{}'...", name);
     
-    match hcs_sandbox::hcs::ComputeSystem::open(name) {
+    match hcs_kube::hcs::ComputeSystem::open(name) {
         Ok(cs) => {
             cs.terminate()?;
             println!("Sandbox '{}' stopped!", name);
@@ -276,7 +309,7 @@ fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_destroy(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Destroying sandbox '{}'...", name);
     
-    match hcs_sandbox::hcs::ComputeSystem::open(name) {
+    match hcs_kube::hcs::ComputeSystem::open(name) {
         Ok(cs) => {
             // Try to terminate first
             let _ = cs.terminate();
@@ -610,7 +643,7 @@ fn cmd_clone(name: &str, storage_id: &str, copy: bool) -> Result<(), Box<dyn std
 
     // Create and start
     println!("Creating compute system...");
-    match hcs_sandbox::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
+    match hcs_kube::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
         Ok(cs) => {
             println!("Created: {}", cs.id());
             println!("Starting...");
@@ -740,7 +773,7 @@ fn cmd_new(name: &str, memory: u64, cpus: u32) -> Result<(), Box<dyn std::error:
 
     // Create and start
     println!("Creating compute system...");
-    match hcs_sandbox::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
+    match hcs_kube::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
         Ok(cs) => {
             println!("Created: {}", cs.id());
             println!("Starting...");
@@ -839,7 +872,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let test_name1 = format!("{}-test1", name);
     println!("Config: {}", serde_json::to_string_pretty(&config1)?);
 
-    match hcs_sandbox::hcs::ComputeSystem::create(&test_name1, &serde_json::to_string(&config1)?) {
+    match hcs_kube::hcs::ComputeSystem::create(&test_name1, &serde_json::to_string(&config1)?) {
         Ok(cs) => {
             println!("SUCCESS: Created compute system: {}", cs.id());
             println!("Now trying to start...");
@@ -870,14 +903,14 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
             // List compute systems to see what Windows Sandbox created
             println!("Checking compute systems after Windows Sandbox launch:");
-            match hcs_sandbox::hcs::compute::enumerate_compute_systems(None) {
+            match hcs_kube::hcs::compute::enumerate_compute_systems(None) {
                 Ok(systems) => {
                     for s in &systems {
                         println!("  {} - owner: {:?}, state: {:?}", s.id, s.owner, s.state);
 
                         // Try to get properties of the running sandbox
                         if s.state.as_deref() == Some("Running") {
-                            if let Ok(cs) = hcs_sandbox::hcs::ComputeSystem::open(&s.id) {
+                            if let Ok(cs) = hcs_kube::hcs::ComputeSystem::open(&s.id) {
                                 if let Ok(props) = cs.get_properties(Some("{}")) {
                                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&props) {
                                         println!("  Properties: {}", serde_json::to_string_pretty(&json)?);
@@ -919,7 +952,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let test_name2 = format!("{}-test2", name);
         println!("Config: {}", serde_json::to_string_pretty(&config2)?);
 
-        match hcs_sandbox::hcs::ComputeSystem::create(&test_name2, &serde_json::to_string(&config2)?) {
+        match hcs_kube::hcs::ComputeSystem::create(&test_name2, &serde_json::to_string(&config2)?) {
             Ok(cs) => {
                 println!("SUCCESS: Created container: {}", cs.id());
                 match cs.start() {
@@ -932,7 +965,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== Test 3: Check what HCS reports ===");
-    match hcs_sandbox::hcs::compute::get_service_properties() {
+    match hcs_kube::hcs::compute::get_service_properties() {
         Ok(props) => {
             println!("HCS Service Properties:");
             if let Some(versions) = props.supported_schema_versions {
@@ -946,7 +979,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Test 4: List existing compute systems ===");
     let mut template_id: Option<String> = None;
-    match hcs_sandbox::hcs::compute::enumerate_compute_systems(None) {
+    match hcs_kube::hcs::compute::enumerate_compute_systems(None) {
         Ok(systems) => {
             if systems.is_empty() {
                 println!("No compute systems found");
@@ -989,7 +1022,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let test_name5 = format!("{}-test5", name);
         println!("Config: {}", serde_json::to_string_pretty(&config5)?);
 
-        match hcs_sandbox::hcs::ComputeSystem::create(&test_name5, &serde_json::to_string(&config5)?) {
+        match hcs_kube::hcs::ComputeSystem::create(&test_name5, &serde_json::to_string(&config5)?) {
             Ok(cs) => {
                 println!("SUCCESS: Created hosted container: {}", cs.id());
                 match cs.start() {
@@ -1002,7 +1035,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
         // Test 6: Try to clone/resume from template
         println!("\n=== Test 6: Try to open and get properties of template ===");
-        match hcs_sandbox::hcs::ComputeSystem::open(tid) {
+        match hcs_kube::hcs::ComputeSystem::open(tid) {
             Ok(cs) => {
                 println!("Opened template: {}", cs.id());
                 match cs.get_properties(Some("{}")) {
@@ -1026,7 +1059,7 @@ fn cmd_test(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_props(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Compute System Properties: {} ===\n", id);
 
-    match hcs_sandbox::hcs::ComputeSystem::open(id) {
+    match hcs_kube::hcs::ComputeSystem::open(id) {
         Ok(cs) => {
             // Try different query formats
             let queries = [
@@ -1126,7 +1159,7 @@ fn cmd_hcs(name: &str, memory: u64, cpus: u32, gpu: bool) -> Result<(), Box<dyn 
 
     // Create the compute system
     println!("Creating HCS compute system...");
-    match hcs_sandbox::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
+    match hcs_kube::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
         Ok(cs) => {
             println!("Created compute system: {}", cs.id());
 
@@ -1159,6 +1192,246 @@ fn cmd_hcs(name: &str, memory: u64, cpus: u32, gpu: bool) -> Result<(), Box<dyn 
             println!("  - Base layer might not be bootable");
             println!("  - Missing UEFI configuration");
             println!("  - HCS schema version mismatch");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_agent(host: &str, port: u16, cmd: &str, output: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+
+    println!("=== Connecting to Sandbox Agent ===\n");
+    println!("Host: {}:{}", host, port);
+    println!("Command: {}", cmd);
+    println!("");
+
+    let addr = format!("{}:{}", host, port);
+    let mut stream = TcpStream::connect(&addr)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+
+    // Build command JSON
+    let cmd_json = match cmd {
+        "ping" => r#"{"type":"Ping"}"#.to_string(),
+        "session" => r#"{"type":"SessionInfo"}"#.to_string(),
+        "screenshot" => r#"{"type":"Screenshot"}"#.to_string(),
+        _ if cmd.starts_with("launch:") => {
+            let path = cmd.strip_prefix("launch:").unwrap();
+            format!(r#"{{"type":"Launch","path":"{}"}}"#, path.replace('\\', "\\\\"))
+        }
+        _ => {
+            println!("Unknown command: {}", cmd);
+            println!("Available commands: ping, session, screenshot, launch:<path>");
+            return Ok(());
+        }
+    };
+
+    // Send command
+    println!("Sending: {}", cmd_json);
+    writeln!(stream, "{}", cmd_json)?;
+    stream.flush()?;
+
+    // Read response
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader.read_line(&mut response)?;
+
+    // Parse and display response
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response) {
+        let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+
+        match status {
+            "Ok" => {
+                println!("\nSUCCESS!");
+                if let Some(data) = json.get("data") {
+                    println!("Data: {}", serde_json::to_string_pretty(data)?);
+                }
+            }
+            "Error" => {
+                let msg = json.get("message").and_then(|v| v.as_str()).unwrap_or("unknown error");
+                println!("\nERROR: {}", msg);
+            }
+            "Screenshot" => {
+                let width = json.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
+                let height = json.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+                println!("\nScreenshot: {}x{}", width, height);
+
+                if let Some(b64) = json.get("png_base64").and_then(|v| v.as_str()) {
+                    use base64::Engine;
+                    let png_data = base64::engine::general_purpose::STANDARD.decode(b64)?;
+
+                    let output_path = output.unwrap_or_else(|| "screenshot.png".to_string());
+                    std::fs::write(&output_path, &png_data)?;
+                    println!("Saved to: {}", output_path);
+                }
+            }
+            _ => {
+                println!("\nUnknown status: {}", status);
+                println!("Response: {}", response);
+            }
+        }
+    } else {
+        println!("\nRaw response: {}", response);
+    }
+
+    Ok(())
+}
+
+fn cmd_launch_agent(name: &str, vhdx_path: &str, memory: u64) -> Result<(), Box<dyn std::error::Error>> {
+    println!("=== Launching Agent Sandbox: {} ===\n", name);
+
+    if !is_elevated() {
+        println!("ERROR: Must run as Administrator.\n");
+        return Ok(());
+    }
+
+    if !Path::new(vhdx_path).exists() {
+        println!("ERROR: VHDX not found: {}", vhdx_path);
+        println!("\nRun first: .\\scripts\\bake-agent.ps1 -SourceStorage <storage-id>");
+        return Ok(());
+    }
+
+    println!("VHDX: {}", vhdx_path);
+    println!("Memory: {} MB", memory);
+
+    // HCS config with networking enabled via NAT
+    let hcs_config = serde_json::json!({
+        "SchemaVersion": { "Major": 2, "Minor": 1 },
+        "Owner": "hcs-sandbox-agent",
+        "ShouldTerminateOnLastHandleClosed": true,
+        "VirtualMachine": {
+            "StopOnReset": true,
+            "Chipset": {
+                "Uefi": {
+                    "BootThis": {
+                        "DeviceType": "ScsiDrive",
+                        "DevicePath": "Scsi(0,0)"
+                    }
+                }
+            },
+            "ComputeTopology": {
+                "Memory": { "SizeInMB": memory },
+                "Processor": { "Count": 2 }
+            },
+            "Devices": {
+                "Scsi": {
+                    "0": {
+                        "Attachments": {
+                            "0": {
+                                "Path": vhdx_path,
+                                "Type": "VirtualDisk"
+                            }
+                        }
+                    }
+                },
+                "HvSocket": {},
+                "NetworkAdapters": {
+                    "0": {
+                        "EndpointId": uuid::Uuid::new_v4().to_string(),
+                        "MacAddress": "00-15-5D-00-00-01"
+                    }
+                }
+            },
+            "GuestState": {
+                "GuestStateFilePath": "",
+                "RuntimeStateFilePath": ""
+            }
+        }
+    });
+
+    let config_json = serde_json::to_string_pretty(&hcs_config)?;
+    println!("\n--- HCS Configuration ---");
+    println!("{}", config_json);
+    println!("-------------------------\n");
+
+    println!("Creating compute system...");
+    match hcs_kube::hcs::ComputeSystem::create(name, &serde_json::to_string(&hcs_config)?) {
+        Ok(cs) => {
+            println!("Created: {}", cs.id());
+            println!("Starting...");
+            match cs.start() {
+                Ok(()) => {
+                    println!("\n=== SUCCESS ===");
+                    println!("Sandbox '{}' is running!", name);
+                    println!("\nAgent should be listening on port 9999 inside the sandbox.");
+                    println!("Note: Networking requires additional HNS setup for external access.");
+                    println!("\nFor now, you can test via Windows Sandbox or RDP.");
+                    println!("Press Ctrl+C to stop the sandbox.");
+
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                    }
+                }
+                Err(e) => println!("Start failed: {}", e),
+            }
+        }
+        Err(e) => {
+            println!("Create failed: {}", e);
+            println!("\nNote: NetworkAdapters require HNS (Host Network Service) setup.");
+            println!("Trying without networking...");
+
+            // Fallback: try without networking
+            let hcs_config_simple = serde_json::json!({
+                "SchemaVersion": { "Major": 2, "Minor": 1 },
+                "Owner": "hcs-sandbox-agent",
+                "ShouldTerminateOnLastHandleClosed": true,
+                "VirtualMachine": {
+                    "StopOnReset": true,
+                    "Chipset": {
+                        "Uefi": {
+                            "BootThis": {
+                                "DeviceType": "ScsiDrive",
+                                "DevicePath": "Scsi(0,0)"
+                            }
+                        }
+                    },
+                    "ComputeTopology": {
+                        "Memory": { "SizeInMB": memory },
+                        "Processor": { "Count": 2 }
+                    },
+                    "Devices": {
+                        "Scsi": {
+                            "0": {
+                                "Attachments": {
+                                    "0": {
+                                        "Path": vhdx_path,
+                                        "Type": "VirtualDisk"
+                                    }
+                                }
+                            }
+                        },
+                        "HvSocket": {}
+                    },
+                    "GuestState": {
+                        "GuestStateFilePath": "",
+                        "RuntimeStateFilePath": ""
+                    }
+                }
+            });
+
+            let name_simple = format!("{}-simple", name);
+            match hcs_kube::hcs::ComputeSystem::create(&name_simple, &serde_json::to_string(&hcs_config_simple)?) {
+                Ok(cs) => {
+                    println!("Created (without networking): {}", cs.id());
+                    println!("Starting...");
+                    match cs.start() {
+                        Ok(()) => {
+                            println!("\n=== SUCCESS (no networking) ===");
+                            println!("Sandbox '{}' is running!", name_simple);
+                            println!("\nThe agent is running but not accessible via TCP.");
+                            println!("Use HvSocket or PowerShell Direct to communicate.");
+                            println!("Press Ctrl+C to stop the sandbox.");
+
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_secs(60));
+                            }
+                        }
+                        Err(e) => println!("Start failed: {}", e),
+                    }
+                }
+                Err(e) => println!("Create failed (simple): {}", e),
+            }
         }
     }
 
