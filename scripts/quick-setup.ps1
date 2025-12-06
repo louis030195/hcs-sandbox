@@ -1,172 +1,157 @@
 #Requires -RunAsAdministrator
-# Quick setup - downloads Windows 11 dev VM and sets up hvkube
-# Run: Start-Process powershell -Verb RunAs -ArgumentList "-File C:\Users\louis030195\Documents\hyperv-kube\scripts\quick-setup.ps1"
+# Quick setup - downloads Windows 11 dev VM, installs terminator, sets up hvkube
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = 'Continue'
 
 $TemplateDir = "C:\HyperVKube\Templates"
 $VmDir = "C:\HyperVKube\VMs"
-$TemplateName = "win11-dev"
+$TemplateName = "win11-terminator"
 $VhdxPath = "$TemplateDir\$TemplateName.vhdx"
+$TestVmName = "hvkube-test-0"
 
-Write-Host "=== HyperV-Kube Quick Setup ===" -ForegroundColor Cyan
-Write-Host ""
+Write-Host "=== HyperV-Kube Setup ===" -ForegroundColor Cyan
 
-# 1. Check/Enable Hyper-V
-Write-Host "[1/5] Checking Hyper-V..." -ForegroundColor Yellow
+# 1. Check Hyper-V
 $hyperv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V
 if ($hyperv.State -ne "Enabled") {
-    Write-Host "Enabling Hyper-V (will require reboot)..."
     Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart
-    Write-Host ""
-    Write-Host "Hyper-V enabled! Please REBOOT and run this script again." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
+    Write-Host "Hyper-V enabled. REBOOT and run again." -ForegroundColor Red
     exit 1
 }
-Write-Host "  Hyper-V is enabled." -ForegroundColor Green
+Write-Host "[OK] Hyper-V enabled" -ForegroundColor Green
 
-# 2. Create directories
-Write-Host "[2/5] Creating directories..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path $TemplateDir | Out-Null
-New-Item -ItemType Directory -Force -Path $VmDir | Out-Null
-Write-Host "  Created $TemplateDir" -ForegroundColor Green
-Write-Host "  Created $VmDir" -ForegroundColor Green
+# 2. Directories
+New-Item -ItemType Directory -Force -Path $TemplateDir, $VmDir | Out-Null
 
-# 3. Download Windows 11 Dev Environment
-if (Test-Path $VhdxPath) {
-    Write-Host "[3/5] Template already exists: $VhdxPath" -ForegroundColor Green
-} else {
-    Write-Host "[3/5] Downloading Windows 11 Dev Environment (~20GB)..." -ForegroundColor Yellow
-    Write-Host "  This is a free pre-configured VM from Microsoft"
-    Write-Host "  URL: https://aka.ms/windev_VM_hyperv"
-    Write-Host ""
-
-    $zipPath = "$env:TEMP\WinDev_HyperV.zip"
-
-    # Download
-    try {
-        Invoke-WebRequest -Uri "https://aka.ms/windev_VM_hyperv" -OutFile $zipPath -UseBasicParsing
-    } catch {
-        Write-Host "  Download failed. Trying alternative..." -ForegroundColor Yellow
-        # Alternative: direct link (may change)
-        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2243733" -OutFile $zipPath -UseBasicParsing
-    }
-
-    Write-Host "  Extracting..." -ForegroundColor Yellow
+# 3. Download Win11 Dev VM if needed
+if (-not (Test-Path $VhdxPath)) {
+    Write-Host "Downloading Windows 11 Dev VM (~20GB)..." -ForegroundColor Yellow
+    $zipPath = "$env:TEMP\WinDev.zip"
+    Invoke-WebRequest -Uri "https://aka.ms/windev_VM_hyperv" -OutFile $zipPath -UseBasicParsing
+    
     $extractDir = "$env:TEMP\WinDevExtract"
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-
-    # Find VHDX
     $vhdx = Get-ChildItem -Path $extractDir -Filter "*.vhdx" -Recurse | Select-Object -First 1
-    if (-not $vhdx) {
-        Write-Error "No VHDX found in download. Contents: $(Get-ChildItem $extractDir -Recurse | Select-Object -ExpandProperty Name)"
-    }
-
-    # Move to templates
     Move-Item $vhdx.FullName $VhdxPath -Force
-    Write-Host "  Template saved: $VhdxPath" -ForegroundColor Green
-
-    # Cleanup
-    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $zipPath, $extractDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+Write-Host "[OK] Template: $VhdxPath" -ForegroundColor Green
 
-# 4. Create test VM from template
-Write-Host "[4/5] Creating test VM from template..." -ForegroundColor Yellow
-
-$TestVmName = "hvkube-test-0"
-$TestVhdx = "$VmDir\$TestVmName\disk.vhdx"
-
-# Remove existing test VM
+# 4. Create test VM
 $existing = Get-VM -Name $TestVmName -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "  Removing existing test VM..."
-    Stop-VM -Name $TestVmName -Force -ErrorAction SilentlyContinue
+    Stop-VM -Name $TestVmName -Force -TurnOff -ErrorAction SilentlyContinue
     Remove-VM -Name $TestVmName -Force
-    Remove-Item (Split-Path $TestVhdx) -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Create directory
+$TestVhdx = "$VmDir\$TestVmName\disk.vhdx"
 New-Item -ItemType Directory -Force -Path (Split-Path $TestVhdx) | Out-Null
-
-# Create differencing disk
-Write-Host "  Creating differencing disk (COW clone)..."
 New-VHD -Path $TestVhdx -ParentPath $VhdxPath -Differencing | Out-Null
-
-# Create VM
-Write-Host "  Creating VM..."
 New-VM -Name $TestVmName -MemoryStartupBytes 4GB -Generation 2 -VHDPath $TestVhdx | Out-Null
-Set-VM -Name $TestVmName -ProcessorCount 2 -AutomaticStartAction Nothing -AutomaticStopAction Save
-Set-VMMemory -VMName $TestVmName -DynamicMemoryEnabled $true
+Set-VM -Name $TestVmName -ProcessorCount 2 -AutomaticStopAction Save
 
-# Connect to switch
-$switch = Get-VMSwitch | Where-Object { $_.Name -eq "Default Switch" } | Select-Object -First 1
-if (-not $switch) {
-    $switch = Get-VMSwitch | Select-Object -First 1
-}
-if ($switch) {
-    Connect-VMNetworkAdapter -VMName $TestVmName -SwitchName $switch.Name
-}
+$switch = Get-VMSwitch | Where-Object { $_.SwitchType -eq "Internal" -or $_.Name -eq "Default Switch" } | Select-Object -First 1
+if ($switch) { Connect-VMNetworkAdapter -VMName $TestVmName -SwitchName $switch.Name }
 
-Write-Host "  VM created: $TestVmName" -ForegroundColor Green
+Write-Host "[OK] VM created: $TestVmName" -ForegroundColor Green
 
-# 5. First boot and save
-Write-Host "[5/5] Booting VM and saving state..." -ForegroundColor Yellow
-Write-Host "  Starting VM (first boot takes 30-60 seconds)..."
-
+# 5. Boot and install terminator
+Write-Host "Booting VM to install terminator..." -ForegroundColor Yellow
 Start-VM -Name $TestVmName
 
-# Wait for VM to be ready
-Write-Host "  Waiting for VM to boot..."
-$timeout = 180  # 3 minutes
+# Wait for IP
+$timeout = 300
 $start = Get-Date
 while ($true) {
     Start-Sleep -Seconds 5
     $elapsed = ((Get-Date) - $start).TotalSeconds
-
-    if ($elapsed -gt $timeout) {
-        Write-Host "  Timeout waiting for VM. Check manually." -ForegroundColor Yellow
-        break
-    }
-
-    # Check for IP
+    if ($elapsed -gt $timeout) { Write-Error "Timeout waiting for VM" }
+    
     $ip = (Get-VMNetworkAdapter -VMName $TestVmName).IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1
     if ($ip) {
-        Write-Host "  VM has IP: $ip" -ForegroundColor Green
-
-        # Wait a bit more for Windows to settle
-        Write-Host "  Waiting for Windows to settle (30s)..."
-        Start-Sleep -Seconds 30
+        Write-Host "  VM IP: $ip" -ForegroundColor Green
         break
     }
-
-    Write-Host "  Still waiting... ($([int]$elapsed)s)"
+    Write-Host "  Waiting... ($([int]$elapsed)s)"
 }
 
-# Create checkpoint
-Write-Host "  Creating checkpoint..."
-Checkpoint-VM -Name $TestVmName -SnapshotName "clean"
+# Wait for Windows to settle
+Write-Host "  Waiting for Windows to settle..."
+Start-Sleep -Seconds 45
 
-# Save state
-Write-Host "  Saving VM state..."
+# Install terminator via PowerShell Direct (Win11 dev VM user: "User", no password by default)
+Write-Host "Installing terminator MCP agent..." -ForegroundColor Yellow
+$cred = Get-Credential -Message "Enter VM credentials (Win11 Dev default: User / empty password)"
+
+Invoke-Command -VMName $TestVmName -Credential $cred -ScriptBlock {
+    $ErrorActionPreference = "Stop"
+    
+    # Create MCP directory
+    New-Item -ItemType Directory -Force -Path "C:\MCP" | Out-Null
+    
+    # Download latest terminator release
+    $release = Invoke-RestMethod "https://api.github.com/repos/mediar-ai/terminator/releases/latest"
+    $asset = $release.assets | Where-Object { $_.name -like "*win32-x64*" -and $_.name -like "*.zip" } | Select-Object -First 1
+    
+    if (-not $asset) { throw "No Windows release found" }
+    
+    $zipPath = "C:\MCP\terminator.zip"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing
+    Expand-Archive -Path $zipPath -DestinationPath "C:\MCP" -Force
+    Remove-Item $zipPath -Force
+    
+    # Find the exe
+    $exe = Get-ChildItem "C:\MCP" -Filter "*.exe" -Recurse | Select-Object -First 1
+    if ($exe) { Move-Item $exe.FullName "C:\MCP\terminator-mcp-agent.exe" -Force }
+    
+    # Create startup script
+    $startupScript = @"
+Start-Process -FilePath "C:\MCP\terminator-mcp-agent.exe" -ArgumentList "-t http --host 0.0.0.0 -p 8080" -WindowStyle Hidden
+"@
+    $startupScript | Out-File "C:\MCP\start-mcp.ps1" -Encoding UTF8
+    
+    # Add to startup via scheduled task
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File C:\MCP\start-mcp.ps1"
+    $trigger = New-ScheduledTaskTrigger -AtLogon
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    Register-ScheduledTask -TaskName "MCP-Agent" -Action $action -Trigger $trigger -Principal $principal -Force
+    
+    # Start it now
+    Start-Process -FilePath "C:\MCP\terminator-mcp-agent.exe" -ArgumentList "-t http --host 0.0.0.0 -p 8080" -WindowStyle Hidden
+    
+    Write-Host "Terminator installed and started"
+}
+
+# Wait for terminator to be ready
+Write-Host "Waiting for terminator health check..." -ForegroundColor Yellow
+$mcpReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    try {
+        $health = Invoke-RestMethod -Uri "http://${ip}:8080/health" -TimeoutSec 2
+        if ($health.status -eq "healthy") {
+            $mcpReady = $true
+            break
+        }
+    } catch {}
+    Start-Sleep -Seconds 2
+}
+
+if ($mcpReady) {
+    Write-Host "[OK] Terminator healthy at http://${ip}:8080" -ForegroundColor Green
+} else {
+    Write-Host "[WARN] Terminator not responding, check manually" -ForegroundColor Yellow
+}
+
+# 6. Checkpoint and save
+Write-Host "Creating checkpoint and saving state..." -ForegroundColor Yellow
+Checkpoint-VM -Name $TestVmName -SnapshotName "clean-with-terminator"
 Save-VM -Name $TestVmName
 
 Write-Host ""
-Write-Host "=== Setup Complete! ===" -ForegroundColor Green
+Write-Host "=== Setup Complete ===" -ForegroundColor Green
+Write-Host "VM: $TestVmName (Saved with terminator)"
 Write-Host ""
-Write-Host "Template: $VhdxPath"
-Write-Host "Test VM:  $TestVmName (state: Saved)"
-Write-Host ""
-Write-Host "Test fast resume:" -ForegroundColor Cyan
+Write-Host "Test:" -ForegroundColor Cyan
 Write-Host "  Start-VM -Name $TestVmName"
-Write-Host "  # Should resume in 2-5 seconds!"
-Write-Host ""
-Write-Host "Register with hvkube:" -ForegroundColor Cyan
-Write-Host "  cd C:\Users\louis030195\Documents\hyperv-kube"
-Write-Host "  cargo build --release"
-Write-Host "  .\target\release\hvkube.exe template register --name $TemplateName --vhdx `"$VhdxPath`""
-Write-Host "  .\target\release\hvkube.exe pool create --name test-pool --template $TemplateName"
-Write-Host ""
-
-Read-Host "Press Enter to exit"
+Write-Host "  # Then: curl http://${ip}:8080/health"
