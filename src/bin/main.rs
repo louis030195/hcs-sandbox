@@ -332,9 +332,8 @@ fn cmd_run(
 
     wsb.push_str("</Configuration>\n");
 
-    // Write to temp file
-    let temp_dir = std::env::temp_dir();
-    let wsb_path = temp_dir.join(format!("hcs-sandbox-{}.wsb", std::process::id()));
+    // Write to a simple path (avoid 8.3 short names in %TEMP%)
+    let wsb_path = std::path::PathBuf::from(format!("C:\\hcs-sandbox-{}.wsb", std::process::id()));
     std::fs::write(&wsb_path, &wsb)?;
 
     println!("\nConfig file: {}", wsb_path.display());
