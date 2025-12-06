@@ -200,7 +200,8 @@ pub async fn resume_vm(
     Ok(Json(ResumeResponse {
         vm_id: vm.id,
         vm_name: vm.name,
-        ip_address: ip,
+        ip_address: ip.clone(),
+        mcp_endpoint: format!("http://{}:8080/mcp", ip),
         resume_time_ms: elapsed.as_millis() as u64,
     }))
 }
@@ -271,7 +272,8 @@ pub async fn acquire_vm(
     Ok(Json(ResumeResponse {
         vm_id: vm.id,
         vm_name: vm.name,
-        ip_address: vm.ip_address.unwrap_or_default(),
+        ip_address: vm.ip_address.clone().unwrap_or_default(),
+        mcp_endpoint: format!("http://{}:8080/mcp", vm.ip_address.as_deref().unwrap_or("0.0.0.0")),
         resume_time_ms: elapsed.as_millis() as u64,
     }))
 }

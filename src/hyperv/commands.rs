@@ -285,6 +285,34 @@ impl HyperV {
             .spawn()?;
         Ok(())
     }
+
+    /// Wait for terminator MCP agent to be healthy (port 8080)
+    pub fn wait_for_terminator(ip: &str, timeout: Duration) -> Result<()> {
+        use std::io::{Read, Write};
+        let start = Instant::now();
+        let addr: std::net::SocketAddr = format!("{}:8080", ip).parse()
+            .map_err(|_| Error::Parse(format!("Invalid IP: {}", ip)))?;
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(Error::GuestNotResponding);
+            }
+
+            if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let _ = stream.write_all(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n");
+                let mut buf = [0u8; 512];
+                if let Ok(n) = stream.read(&mut buf) {
+                    let response = String::from_utf8_lossy(&buf[..n]);
+                    if response.contains("200") || response.contains("healthy") {
+                        return Ok(());
+                    }
+                }
+            }
+
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
 }
 
 /// Execute PowerShell command

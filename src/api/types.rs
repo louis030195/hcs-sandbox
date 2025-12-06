@@ -101,6 +101,7 @@ pub struct ResumeResponse {
     pub vm_id: String,
     pub vm_name: String,
     pub ip_address: String,
+    pub mcp_endpoint: String,
     pub resume_time_ms: u64,
 }
 
