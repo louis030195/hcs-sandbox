@@ -658,4 +658,141 @@ mod tests {
         let available = db.find_available_vm_in_pool(&pool.id).unwrap();
         assert!(available.is_none());
     }
+
+    #[test]
+    fn test_get_nonexistent_template() {
+        let db = Database::in_memory().unwrap();
+        let result = db.get_template("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_nonexistent_pool() {
+        let db = Database::in_memory().unwrap();
+        let result = db.get_pool("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_nonexistent_vm() {
+        let db = Database::in_memory().unwrap();
+        let result = db.get_vm("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_duplicate_template_name() {
+        let db = Database::in_memory().unwrap();
+        
+        let t1 = Template::new("win11", r"C:\t1.vhdx");
+        db.insert_template(&t1).unwrap();
+        
+        let t2 = Template::new("win11", r"C:\t2.vhdx");
+        let result = db.insert_template(&t2);
+        assert!(result.is_err()); // Should fail due to unique constraint
+    }
+
+    #[test]
+    fn test_duplicate_pool_name() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\t.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let p1 = VMPool::new("agents", &template.id);
+        db.insert_pool(&p1).unwrap();
+        
+        let p2 = VMPool::new("agents", &template.id);
+        let result = db.insert_pool(&p2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_duplicate_vm_name() {
+        let db = Database::in_memory().unwrap();
+        
+        let vm1 = VM::new("vm-1".to_string(), PathBuf::from(r"C:\v1.vhdx"), 4096, 2);
+        db.insert_vm(&vm1).unwrap();
+        
+        let vm2 = VM::new("vm-1".to_string(), PathBuf::from(r"C:\v2.vhdx"), 4096, 2);
+        let result = db.insert_vm(&vm2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_pool_no_available_vm() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\t.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let pool = VMPool::new("empty-pool", &template.id);
+        db.insert_pool(&pool).unwrap();
+        
+        let result = db.find_available_vm_in_pool(&pool.id).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_vm_state_transitions() {
+        let db = Database::in_memory().unwrap();
+        
+        let vm = VM::new("vm".to_string(), PathBuf::from(r"C:\v.vhdx"), 4096, 2);
+        db.insert_vm(&vm).unwrap();
+        
+        // Off -> Running
+        db.update_vm_state(&vm.id, VMState::Running).unwrap();
+        assert_eq!(db.get_vm(&vm.id).unwrap().unwrap().state, VMState::Running);
+        
+        // Running -> Saved
+        db.update_vm_state(&vm.id, VMState::Saved).unwrap();
+        assert_eq!(db.get_vm(&vm.id).unwrap().unwrap().state, VMState::Saved);
+        
+        // Saved -> Running (resume)
+        db.update_vm_state(&vm.id, VMState::Running).unwrap();
+        assert_eq!(db.get_vm(&vm.id).unwrap().unwrap().state, VMState::Running);
+        
+        // Running -> Off
+        db.update_vm_state(&vm.id, VMState::Off).unwrap();
+        assert_eq!(db.get_vm(&vm.id).unwrap().unwrap().state, VMState::Off);
+    }
+
+    #[test]
+    fn test_vm_error_state() {
+        let db = Database::in_memory().unwrap();
+        
+        let vm = VM::new("vm".to_string(), PathBuf::from(r"C:\v.vhdx"), 4096, 2);
+        db.insert_vm(&vm).unwrap();
+        
+        db.update_vm_state(&vm.id, VMState::Error).unwrap();
+        // Error message not directly settable, just state
+        
+        let loaded = db.get_vm(&vm.id).unwrap().unwrap();
+        assert_eq!(loaded.state, VMState::Error);
+        // assert_eq!(loaded.error_message, Some("Crashed".to_string()));
+    }
+
+    #[test]
+    fn test_list_vms_empty() {
+        let db = Database::in_memory().unwrap();
+        let vms = db.list_vms().unwrap();
+        assert!(vms.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_pools_same_template() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\t.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let p1 = VMPool::new("pool-1", &template.id);
+        let p2 = VMPool::new("pool-2", &template.id);
+        
+        db.insert_pool(&p1).unwrap();
+        db.insert_pool(&p2).unwrap();
+        
+        let pools = db.list_pools().unwrap();
+        assert_eq!(pools.len(), 2);
+    }
 }

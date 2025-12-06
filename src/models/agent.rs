@@ -137,3 +137,83 @@ pub struct AgentResult {
     /// Duration in seconds
     pub duration_seconds: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_status_display() {
+        assert_eq!(AgentStatus::Pending.to_string(), "Pending");
+        assert_eq!(AgentStatus::Running.to_string(), "Running");
+        assert_eq!(AgentStatus::Completed.to_string(), "Completed");
+        assert_eq!(AgentStatus::Failed.to_string(), "Failed");
+    }
+
+    #[test]
+    fn test_task_new_defaults() {
+        let t = Task::new("browser-automation");
+        assert_eq!(t.workflow, "browser-automation");
+        assert_eq!(t.timeout_seconds, 300);
+        assert!(!t.requires_gpu);
+        assert!(t.input.is_null());
+    }
+
+    #[test]
+    fn test_task_builder() {
+        let input = serde_json::json!({"url": "https://example.com"});
+        let t = Task::new("screenshot")
+            .with_input(input.clone())
+            .with_timeout(60)
+            .with_gpu(true);
+
+        assert_eq!(t.timeout_seconds, 60);
+        assert!(t.requires_gpu);
+        assert_eq!(t.input["url"], "https://example.com");
+    }
+
+    #[test]
+    fn test_agent_new() {
+        let task = Task::new("test-workflow");
+        let agent = Agent::new("test-agent", task);
+
+        assert!(agent.id.starts_with("agent-"));
+        assert_eq!(agent.name, "test-agent");
+        assert_eq!(agent.status, AgentStatus::Pending);
+        assert!(agent.pool_id.is_none());
+        assert!(agent.vm_id.is_none());
+    }
+
+    #[test]
+    fn test_agent_with_pool() {
+        let task = Task::new("workflow");
+        let agent = Agent::new("agent", task).with_pool("pool-123");
+        assert_eq!(agent.pool_id, Some("pool-123".to_string()));
+    }
+
+    #[test]
+    fn test_agent_result() {
+        let result = AgentResult {
+            success: true,
+            output: serde_json::json!({"status": "done"}),
+            screenshots: vec!["s1.png".into(), "s2.png".into()],
+            duration_seconds: 45,
+        };
+        
+        assert!(result.success);
+        assert_eq!(result.screenshots.len(), 2);
+        assert_eq!(result.duration_seconds, 45);
+    }
+
+    #[test]
+    fn test_agent_serialization() {
+        let task = Task::new("test");
+        let agent = Agent::new("test", task);
+        
+        let json = serde_json::to_string(&agent).unwrap();
+        let parsed: Agent = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(parsed.id, agent.id);
+        assert_eq!(parsed.status, AgentStatus::Pending);
+    }
+}

@@ -91,3 +91,54 @@ impl TemplateConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_template_new_defaults() {
+        let t = Template::new("win11", r"C:\templates\win11.vhdx");
+        assert!(t.id.starts_with("tmpl-"));
+        assert_eq!(t.name, "win11");
+        assert_eq!(t.memory_mb, 4096);
+        assert_eq!(t.cpu_count, 2);
+        assert!(!t.gpu_enabled);
+        assert!(t.installed_software.is_empty());
+        assert!(t.description.is_none());
+    }
+
+    #[test]
+    fn test_template_builder() {
+        let t = Template::new("win11-chrome", r"C:\templates\win11.vhdx")
+            .with_memory(8192)
+            .with_cpus(4)
+            .with_gpu(true)
+            .with_software(vec!["Chrome".into(), "Node.js".into()])
+            .with_description("Windows 11 with Chrome");
+
+        assert_eq!(t.memory_mb, 8192);
+        assert_eq!(t.cpu_count, 4);
+        assert!(t.gpu_enabled);
+        assert_eq!(t.installed_software.len(), 2);
+        assert_eq!(t.description, Some("Windows 11 with Chrome".to_string()));
+    }
+
+    #[test]
+    fn test_template_serialization() {
+        let t = Template::new("test", r"C:\test.vhdx");
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("\"name\":\"test\""));
+        
+        let parsed: Template = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, t.name);
+        assert_eq!(parsed.id, t.id);
+    }
+
+    #[test]
+    fn test_template_config() {
+        let cfg = TemplateConfig::new("win11", r"C:\test.vhdx");
+        assert_eq!(cfg.memory_mb, 4096);
+        assert_eq!(cfg.cpu_count, 2);
+    }
+}

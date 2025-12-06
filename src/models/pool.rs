@@ -64,3 +64,58 @@ pub struct PoolStatus {
     pub off_vms: usize,
     pub error_vms: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pool_new_defaults() {
+        let p = VMPool::new("agents", "tmpl-123");
+        assert!(p.id.starts_with("pool-"));
+        assert_eq!(p.name, "agents");
+        assert_eq!(p.template_id, "tmpl-123");
+        assert_eq!(p.desired_count, 3);
+        assert_eq!(p.warm_count, 1);
+        assert_eq!(p.max_per_host, 10);
+    }
+
+    #[test]
+    fn test_pool_builder() {
+        let p = VMPool::new("large-pool", "tmpl-456")
+            .with_count(10)
+            .with_warm_count(3)
+            .with_max_per_host(5);
+
+        assert_eq!(p.desired_count, 10);
+        assert_eq!(p.warm_count, 3);
+        assert_eq!(p.max_per_host, 5);
+    }
+
+    #[test]
+    fn test_pool_serialization() {
+        let p = VMPool::new("test", "tmpl-1");
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"name\":\"test\""));
+        
+        let parsed: VMPool = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, p.id);
+    }
+
+    #[test]
+    fn test_pool_status() {
+        let status = PoolStatus {
+            id: "pool-1".to_string(),
+            name: "agents".to_string(),
+            template_id: "tmpl-1".to_string(),
+            desired_count: 5,
+            total_vms: 5,
+            running_vms: 1,
+            saved_vms: 3,
+            off_vms: 1,
+            error_vms: 0,
+        };
+        
+        assert_eq!(status.running_vms + status.saved_vms + status.off_vms + status.error_vms, 5);
+    }
+}

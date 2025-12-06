@@ -164,3 +164,134 @@ fn test_mcp_tools_list() {
         .send()
         .unwrap();
 }
+
+// === Error Case Tests ===
+
+#[test]
+#[ignore]
+fn test_acquire_from_nonexistent_pool() {
+    let c = client();
+    
+    let resp = c
+        .post(format!("{}/api/v1/acquire", API_URL))
+        .json(&AcquireRequest { pool_name: "nonexistent-pool".to_string() })
+        .send()
+        .unwrap();
+    
+    assert_eq!(resp.status(), 404);
+}
+
+#[test]
+#[ignore]
+fn test_release_nonexistent_vm() {
+    let c = client();
+    
+    let resp = c
+        .post(format!("{}/api/v1/vms/nonexistent-vm/release", API_URL))
+        .json(&ReleaseRequest { reset: false })
+        .send()
+        .unwrap();
+    
+    assert_eq!(resp.status(), 404);
+}
+
+#[test]
+#[ignore]
+fn test_resume_nonexistent_vm() {
+    let c = client();
+    
+    let resp = c
+        .post(format!("{}/api/v1/vms/nonexistent-vm/resume", API_URL))
+        .send()
+        .unwrap();
+    
+    assert_eq!(resp.status(), 404);
+}
+
+#[test]
+#[ignore]
+fn test_get_nonexistent_template() {
+    let c = client();
+    
+    let resp = c
+        .get(format!("{}/api/v1/templates/nonexistent", API_URL))
+        .send()
+        .unwrap();
+    
+    assert_eq!(resp.status(), 404);
+}
+
+#[test]
+#[ignore]
+fn test_double_acquire_same_vm() {
+    let c = client();
+    
+    // Acquire first VM
+    let vm1: ResumeResponse = c
+        .post(format!("{}/api/v1/acquire", API_URL))
+        .json(&AcquireRequest { pool_name: "agents".to_string() })
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    
+    // Try to acquire again - should get different VM
+    let vm2: ResumeResponse = c
+        .post(format!("{}/api/v1/acquire", API_URL))
+        .json(&AcquireRequest { pool_name: "agents".to_string() })
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    
+    // Should be different VMs
+    assert_ne!(vm1.vm_id, vm2.vm_id);
+    
+    // Release both
+    c.post(format!("{}/api/v1/vms/{}/release", API_URL, vm1.vm_name))
+        .json(&ReleaseRequest { reset: false })
+        .send()
+        .unwrap();
+    c.post(format!("{}/api/v1/vms/{}/release", API_URL, vm2.vm_name))
+        .json(&ReleaseRequest { reset: false })
+        .send()
+        .unwrap();
+}
+
+#[test]
+#[ignore]
+fn test_acquire_release_cycle() {
+    let c = client();
+    
+    // Acquire
+    let vm: ResumeResponse = c
+        .post(format!("{}/api/v1/acquire", API_URL))
+        .json(&AcquireRequest { pool_name: "agents".to_string() })
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    
+    let vm_name = vm.vm_name.clone();
+    
+    // Release
+    c.post(format!("{}/api/v1/vms/{}/release", API_URL, vm_name))
+        .json(&ReleaseRequest { reset: false })
+        .send()
+        .unwrap();
+    
+    // Acquire again - might get same VM back
+    let vm2: ResumeResponse = c
+        .post(format!("{}/api/v1/acquire", API_URL))
+        .json(&AcquireRequest { pool_name: "agents".to_string() })
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    
+    // Release
+    c.post(format!("{}/api/v1/vms/{}/release", API_URL, vm2.vm_name))
+        .json(&ReleaseRequest { reset: false })
+        .send()
+        .unwrap();
+}

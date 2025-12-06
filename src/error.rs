@@ -57,3 +57,61 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        let e = Error::VMNotFound("vm-123".to_string());
+        assert_eq!(e.to_string(), "VM not found: vm-123");
+
+        let e = Error::TemplateNotFound("tmpl-1".to_string());
+        assert_eq!(e.to_string(), "Template not found: tmpl-1");
+
+        let e = Error::NoVMAvailable;
+        assert_eq!(e.to_string(), "No VM available in pool");
+    }
+
+    #[test]
+    fn test_error_invalid_state() {
+        let e = Error::InvalidState {
+            current: "Off".to_string(),
+            expected: "Saved".to_string(),
+        };
+        assert!(e.to_string().contains("Off"));
+        assert!(e.to_string().contains("Saved"));
+    }
+
+    #[test]
+    fn test_error_insufficient_memory() {
+        let e = Error::InsufficientMemory {
+            required: 8192,
+            available: 4096,
+        };
+        assert!(e.to_string().contains("8192"));
+        assert!(e.to_string().contains("4096"));
+    }
+
+    #[test]
+    fn test_error_debug() {
+        let e = Error::Timeout;
+        let debug = format!("{:?}", e);
+        assert!(debug.contains("Timeout"));
+    }
+
+    #[test]
+    fn test_result_type() {
+        fn returns_ok() -> Result<i32> {
+            Ok(42)
+        }
+        
+        fn returns_err() -> Result<i32> {
+            Err(Error::NoVMAvailable)
+        }
+
+        assert_eq!(returns_ok().unwrap(), 42);
+        assert!(returns_err().is_err());
+    }
+}

@@ -404,3 +404,137 @@ impl Orchestrator {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Template, VMPool, VM, VMState};
+    use tempfile::TempDir;
+
+    fn setup_test_orchestrator() -> (Orchestrator, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let config = OrchestratorConfig {
+            vm_storage_path: tmp.path().join("vms"),
+            db_path: tmp.path().join("test.db"),
+            switch_name: "Default Switch".to_string(),
+            ready_timeout: Duration::from_secs(5),
+        };
+        let orch = Orchestrator::with_config(config).unwrap();
+        (orch, tmp)
+    }
+
+    #[test]
+    fn test_orchestrator_config_default() {
+        let config = OrchestratorConfig::default();
+        assert_eq!(config.switch_name, "Default Switch");
+        assert_eq!(config.ready_timeout, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn test_create_pool_without_template() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        
+        let pool = VMPool::new("test-pool", "nonexistent-template");
+        let result = orch.create_pool(pool);
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::TemplateNotFound(_)));
+    }
+
+    #[test]
+    fn test_list_empty_templates() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        let templates = orch.list_templates().unwrap();
+        assert!(templates.is_empty());
+    }
+
+    #[test]
+    fn test_list_empty_pools() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        let pools = orch.list_pools().unwrap();
+        assert!(pools.is_empty());
+    }
+
+    #[test]
+    fn test_list_empty_vms() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        let vms = orch.list_vms().unwrap();
+        assert!(vms.is_empty());
+    }
+
+    #[test]
+    fn test_get_nonexistent_template() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        let result = orch.get_template("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_nonexistent_vm() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        let result = orch.get_vm("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pool_status_empty() {
+        let (orch, tmp) = setup_test_orchestrator();
+        
+        // Create a fake template file
+        let vhdx_path = tmp.path().join("template.vhdx");
+        std::fs::write(&vhdx_path, "fake").unwrap();
+        
+        let template = Template::new("test", &vhdx_path);
+        orch.register_template(template.clone()).unwrap();
+        
+        let pool = VMPool::new("test-pool", &template.id);
+        orch.create_pool(pool.clone()).unwrap();
+        
+        let status = orch.get_pool_status(&pool.id).unwrap();
+        assert_eq!(status.total_vms, 0);
+        assert_eq!(status.running_vms, 0);
+        assert_eq!(status.saved_vms, 0);
+    }
+
+    #[test]
+    fn test_register_template_with_fake_vhdx() {
+        let (orch, tmp) = setup_test_orchestrator();
+        
+        // Create a fake VHDX file
+        let vhdx_path = tmp.path().join("test.vhdx");
+        std::fs::write(&vhdx_path, "fake vhdx content").unwrap();
+        
+        let template = Template::new("win11", &vhdx_path);
+        let result = orch.register_template(template);
+        
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_register_template_missing_vhdx() {
+        let (orch, _tmp) = setup_test_orchestrator();
+        
+        let template = Template::new("missing", r"C:\nonexistent\path.vhdx");
+        let result = orch.register_template(template);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_acquire_from_empty_pool() {
+        let (orch, tmp) = setup_test_orchestrator();
+        
+        let vhdx_path = tmp.path().join("template.vhdx");
+        std::fs::write(&vhdx_path, "fake").unwrap();
+        
+        let template = Template::new("test", &vhdx_path);
+        orch.register_template(template.clone()).unwrap();
+        
+        let pool = VMPool::new("empty-pool", &template.id);
+        orch.create_pool(pool.clone()).unwrap();
+        
+        let result = orch.acquire_vm(&pool.id);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::NoVMAvailable));
+    }
+}
