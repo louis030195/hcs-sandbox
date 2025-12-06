@@ -1,59 +1,93 @@
-# HCS Sandbox
+# HyperV-Kube
 
-Low-level Windows sandbox orchestrator using Host Compute Service (HCS) APIs - the same APIs that power Windows Sandbox and Docker on Windows.
+Lightweight Kubernetes-like VM orchestrator for UI automation agents. Uses Hyper-V Save/Resume for **2-5 second** VM startup.
 
 ## Features
 
-- **No Docker required** - Uses HCS directly with dynamic base OS layers
-- **Fast boot** - Sandboxes start in 2-5 seconds vs minutes for VMs
-- **UI Automation ready** - HyperV isolation with GPU passthrough
-- **High density** - Run 10-20 sandboxes per host
-- **Rust API** - Type-safe orchestrator with builder pattern
+- **Blazing fast** - VMs resume from saved state in 2-5 seconds
+- **Simple** - Uses Hyper-V directly via PowerShell (no HCS complexity)
+- **Pool management** - Pre-warm VMs for instant availability
+- **Template-based** - Clone VMs from golden images using differencing disks
+- **SQLite state** - Lightweight persistent state tracking
 
 ## Requirements
 
-- Windows 10/11 Pro or Enterprise
-- Hyper-V enabled (`Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All`)
-- Containers feature enabled (`Enable-WindowsOptionalFeature -Online -FeatureName Containers -All`)
+- Windows 10/11 Pro or Windows Server
+- Hyper-V enabled: `Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All`
 - Run as Administrator
 
 ## Quick Start
 
 ```powershell
-# Clone and build
-git clone https://github.com/louis030195/hcs-sandbox
-cd hcs-sandbox
+# Build
 cargo build --release
 
-# Run (as Administrator)
-.\target\release\hcs-sandbox.exe
+# Register a template (your golden VHDX image)
+hvkube template register --name win11-chrome --vhdx C:\Templates\win11.vhdx
+
+# Create a pool
+hvkube pool create --name browser-pool --template win11-chrome --count 3
+
+# Provision VMs (creates differencing disks)
+hvkube pool provision browser-pool --count 3
+
+# Prepare VMs (first boot, checkpoint, save state)
+hvkube pool prepare browser-pool
+
+# Now VMs are ready for instant resume!
+hvkube vm resume browser-pool-0
+# VM ready in ~3 seconds!
+
+# Save back when done
+hvkube vm save browser-pool-0
+```
+
+## CLI Commands
+
+```
+hvkube template register   Register a golden image
+hvkube template list       List templates
+hvkube pool create         Create a VM pool
+hvkube pool provision      Create VMs for pool
+hvkube pool prepare        Boot and save all VMs
+hvkube pool status         Show pool status
+hvkube vm list             List all VMs
+hvkube vm resume <name>    Resume saved VM (fast!)
+hvkube vm save <name>      Save VM state
+hvkube vm reset <name>     Reset to clean checkpoint
+hvkube vm console <name>   Open Hyper-V console
+hvkube reconcile           Sync DB with Hyper-V
 ```
 
 ## Library Usage
 
 ```rust
-use hcs_sandbox::{Orchestrator, SandboxConfig};
+use hyperv_kube::{Orchestrator, models::{Template, VMPool}};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> hyperv_kube::Result<()> {
     let orch = Orchestrator::new()?;
 
-    let config = SandboxConfig::builder()
-        .name("my-sandbox")
-        .memory_mb(4096)
-        .cpu_count(2)
-        .gpu_enabled(true)
-        .build();
+    // Register template
+    let template = Template::new("win11", r"C:\Templates\win11.vhdx");
+    orch.register_template(template)?;
 
-    // Create and start
-    let id = orch.create_and_start(config)?;
+    // Create pool and provision VMs
+    let pool = VMPool::new("agents", "tmpl-xxx").with_count(3);
+    orch.create_pool(pool)?;
+    orch.provision_pool("pool-xxx", 3)?;
 
-    // List sandboxes
-    for info in orch.list_with_state() {
-        println!("{} - {}", info.name, info.state);
-    }
+    // Prepare VMs (first boot + save)
+    // ... or use CLI: hvkube pool prepare agents
 
-    // Cleanup
-    orch.destroy(&id)?;
+    // Acquire VM (resumes in 2-5 seconds!)
+    let vm = orch.acquire_vm("pool-xxx")?;
+    println!("VM ready at: {}", vm.ip_address.unwrap());
+
+    // Do UI automation work...
+
+    // Release back to pool
+    orch.release_vm(&vm.id, false)?;
+
     Ok(())
 }
 ```
@@ -61,31 +95,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│            HOST WINDOWS (Admin)                     │
-├─────────────────────────────────────────────────────┤
-│  Orchestrator                                       │
-│    └── Sandbox[] (up to 20)                         │
-│          ├── HCS ComputeSystem (HyperV isolation)   │
-│          ├── GPU passthrough                        │
-│          └── Desktop session                        │
-├─────────────────────────────────────────────────────┤
-│  HCS APIs (computecore.dll)                         │
-│    ├── HcsCreateComputeSystem                       │
-│    ├── HcsStartComputeSystem                        │
-│    └── HcsSetupBaseOSLayer (no Docker needed!)      │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         hvkube CLI                              │
+├─────────────────────────────────────────────────────────────────┤
+│  Orchestrator                                                   │
+│    ├── Templates (golden images)                                │
+│    ├── Pools (groups of VMs)                                    │
+│    └── VMs (instances)                                          │
+├─────────────────────────────────────────────────────────────────┤
+│  SQLite DB (state.db)          Hyper-V (PowerShell)             │
+│    ├── templates               Start-VM, Save-VM                │
+│    ├── pools                   New-VM, New-VHD                  │
+│    ├── vms                     Checkpoint-VM                    │
+│    └── agents                  Get-VMNetworkAdapter             │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Hyper-V VMs                                                    │
+│    ┌───────────┐  ┌───────────┐  ┌───────────┐                 │
+│    │ agent-0   │  │ agent-1   │  │ agent-2   │                 │
+│    │ (Saved)   │  │ (Running) │  │ (Saved)   │                 │
+│    │ ~3s start │  │           │  │ ~3s start │                 │
+│    └───────────┘  └───────────┘  └───────────┘                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Why HCS over Docker?
+## Why Hyper-V Save/Resume?
 
-| Feature | Docker (Process Isolation) | HCS Sandbox (HyperV) |
-|---------|---------------------------|----------------------|
-| Desktop Session | ❌ No | ✅ Yes |
-| UI Automation | ❌ No | ✅ Yes |
-| GPU Access | ❌ No | ✅ Yes |
-| Boot Time | ~10s | ~3s |
-| Base Image | Docker Hub | Host OS (dynamic) |
+| | Full Boot | Save/Resume |
+|---|-----------|-------------|
+| Time | 30-60s | 2-5s |
+| State | Fresh | Preserved |
+| Apps | Need to relaunch | Already running |
+
+The trick: Pre-boot VMs once, save state. Resume instantly when needed.
+
+## Creating a Golden Image
+
+1. Create a new VM in Hyper-V Manager
+2. Install Windows 11/Server
+3. Install required software (Chrome, Node, etc.)
+4. Configure auto-login
+5. Shutdown
+6. Register the VHDX with hvkube
+
+```powershell
+hvkube template register --name win11-chrome --vhdx "C:\VMs\golden\disk.vhdx" --memory 4096 --cpus 2
+```
 
 ## License
 

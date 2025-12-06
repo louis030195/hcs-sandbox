@@ -1,39 +1,31 @@
 [package]
-name = "hcs-sandbox"
+name = "hyperv-kube"
 version = "0.1.0"
 edition = "2021"
-description = "HCS-based sandbox orchestrator for Windows UI automation"
+description = "Lightweight Hyper-V orchestrator for UI automation agents"
 license = "MIT"
 
 [lib]
-name = "hcs_sandbox"
+name = "hyperv_kube"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hcs-sandbox"
-path = "src/bin/main.rs"
+name = "hvkube"
+path = "src/bin/hvkube.rs"
 
 [dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_System_HostComputeSystem",
-    "Win32_System_HostComputeNetwork",
-    "Win32_Security",
-    "Win32_System_Com",
-    "Win32_System_Threading",
-    "Win32_System_Memory",
-    "Win32_Storage_Vhd",
-    "Win32_Networking_WinSock",
-] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 uuid = { version = "1.0", features = ["v4"] }
 parking_lot = "0.12"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+tabled = "0.16"
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["full", "test-util"] }
-mockall = "0.13"
 tempfile = "3.0"
