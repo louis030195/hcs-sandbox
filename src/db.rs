@@ -521,3 +521,141 @@ impl Database {
         })
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Template, VMPool, VM, VMState};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_database_in_memory() {
+        let db = Database::in_memory().unwrap();
+        assert!(db.list_templates().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_template_crud() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\templates\win11.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let loaded = db.get_template(&template.id).unwrap().unwrap();
+        assert_eq!(loaded.name, "win11");
+        
+        let templates = db.list_templates().unwrap();
+        assert_eq!(templates.len(), 1);
+        
+        let by_name = db.get_template_by_name("win11").unwrap().unwrap();
+        assert_eq!(by_name.id, template.id);
+        
+        db.delete_template(&template.id).unwrap();
+        assert!(db.get_template(&template.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_pool_crud() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\test.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let pool = VMPool::new("agents", &template.id).with_count(3);
+        db.insert_pool(&pool).unwrap();
+        
+        let loaded = db.get_pool(&pool.id).unwrap().unwrap();
+        assert_eq!(loaded.name, "agents");
+        assert_eq!(loaded.desired_count, 3);
+        
+        assert_eq!(db.list_pools().unwrap().len(), 1);
+        
+        let by_name = db.get_pool_by_name("agents").unwrap().unwrap();
+        assert_eq!(by_name.id, pool.id);
+    }
+
+    #[test]
+    fn test_vm_crud() {
+        let db = Database::in_memory().unwrap();
+        
+        let vm = VM::new(
+            "test-vm-1".to_string(),
+            PathBuf::from(r"C:\vms\test.vhdx"),
+            4096,
+            2,
+        );
+        db.insert_vm(&vm).unwrap();
+        
+        let loaded = db.get_vm(&vm.id).unwrap().unwrap();
+        assert_eq!(loaded.name, "test-vm-1");
+        assert_eq!(loaded.state, VMState::Off);
+        
+        db.update_vm_state(&vm.id, VMState::Running).unwrap();
+        db.update_vm_ip(&vm.id, Some("192.168.1.100")).unwrap();
+        
+        let updated = db.get_vm(&vm.id).unwrap().unwrap();
+        assert_eq!(updated.state, VMState::Running);
+        assert_eq!(updated.ip_address, Some("192.168.1.100".to_string()));
+        
+        let by_name = db.get_vm_by_name("test-vm-1").unwrap().unwrap();
+        assert_eq!(by_name.id, vm.id);
+    }
+
+    #[test]
+    fn test_vm_pool_listing() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\test.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let pool = VMPool::new("agents", &template.id);
+        db.insert_pool(&pool).unwrap();
+        
+        for i in 0..3 {
+            let mut vm = VM::new(
+                format!("agent-{}", i),
+                PathBuf::from(format!(r"C:\vms\agent-{}.vhdx", i)),
+                4096,
+                2,
+            );
+            vm.pool_id = Some(pool.id.clone());
+            db.insert_vm(&vm).unwrap();
+        }
+        
+        let vms = db.list_vms_by_pool(&pool.id).unwrap();
+        assert_eq!(vms.len(), 3);
+    }
+
+    #[test]
+    fn test_find_available_vm() {
+        let db = Database::in_memory().unwrap();
+        
+        let template = Template::new("win11", r"C:\test.vhdx");
+        db.insert_template(&template).unwrap();
+        
+        let pool = VMPool::new("agents", &template.id);
+        db.insert_pool(&pool).unwrap();
+        
+        let mut vm = VM::new(
+            "agent-0".to_string(),
+            PathBuf::from(r"C:\vms\agent-0.vhdx"),
+            4096,
+            2,
+        );
+        vm.pool_id = Some(pool.id.clone());
+        vm.state = VMState::Saved;
+        db.insert_vm(&vm).unwrap();
+        // Update state in DB
+        db.update_vm_state(&vm.id, VMState::Saved).unwrap();
+        
+        let available = db.find_available_vm_in_pool(&pool.id).unwrap();
+        assert!(available.is_some());
+        assert_eq!(available.unwrap().id, vm.id);
+        
+        // Assign agent
+        db.update_vm_agent(&vm.id, Some("agent-task-1")).unwrap();
+        let available = db.find_available_vm_in_pool(&pool.id).unwrap();
+        assert!(available.is_none());
+    }
+}

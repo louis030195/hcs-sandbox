@@ -166,3 +166,57 @@ pub struct HealthResponse {
     pub status: String,
     pub version: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_template_request_defaults() {
+        let json = r#"{"name": "test", "vhdx_path": "C:\test.vhdx"}"#;
+        let req: CreateTemplateRequest = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(req.name, "test");
+        assert_eq!(req.memory_mb, 4096); // default
+        assert_eq!(req.cpu_count, 2); // default
+        assert!(!req.gpu_enabled);
+    }
+
+    #[test]
+    fn test_create_pool_request_defaults() {
+        let json = r#"{"name": "agents", "template_name": "win11"}"#;
+        let req: CreatePoolRequest = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(req.desired_count, 3); // default
+        assert_eq!(req.warm_count, 1); // default
+    }
+
+    #[test]
+    fn test_resume_response_serialization() {
+        let resp = ResumeResponse {
+            vm_id: "vm-123".to_string(),
+            vm_name: "agent-0".to_string(),
+            ip_address: "192.168.1.100".to_string(),
+            mcp_endpoint: "http://192.168.1.100:8080/mcp".to_string(),
+            resume_time_ms: 2500,
+        };
+        
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("mcp_endpoint"));
+        assert!(json.contains("192.168.1.100:8080/mcp"));
+    }
+
+    #[test]
+    fn test_acquire_request() {
+        let json = r#"{"pool_name": "agents"}"#;
+        let req: AcquireVMRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.pool_name, "agents");
+    }
+
+    #[test]
+    fn test_release_request_default() {
+        let json = r#"{}"#;
+        let req: ReleaseVMRequest = serde_json::from_str(json).unwrap();
+        assert!(!req.reset); // default false
+    }
+}

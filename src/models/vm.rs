@@ -153,3 +153,78 @@ impl VMConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vm_state_from_hyperv() {
+        assert_eq!(VMState::from_hyperv_state(2), VMState::Off);
+        assert_eq!(VMState::from_hyperv_state(3), VMState::Running);
+        assert_eq!(VMState::from_hyperv_state(6), VMState::Saved);
+        assert_eq!(VMState::from_hyperv_state(9), VMState::Paused);
+        assert_eq!(VMState::from_hyperv_state(999), VMState::Error);
+    }
+
+    #[test]
+    fn test_vm_state_display() {
+        assert_eq!(VMState::Off.to_string(), "Off");
+        assert_eq!(VMState::Running.to_string(), "Running");
+        assert_eq!(VMState::Saved.to_string(), "Saved");
+    }
+
+    #[test]
+    fn test_vm_new() {
+        let vm = VM::new(
+            "test-vm".to_string(),
+            PathBuf::from("C:\test.vhdx"),
+            4096,
+            2,
+        );
+        assert!(vm.id.starts_with("vm-"));
+        assert_eq!(vm.name, "test-vm");
+        assert_eq!(vm.state, VMState::Off);
+        assert_eq!(vm.memory_mb, 4096);
+        assert_eq!(vm.cpu_count, 2);
+        assert!(vm.ip_address.is_none());
+    }
+
+    #[test]
+    fn test_vm_is_available() {
+        let mut vm = VM::new(
+            "test-vm".to_string(),
+            PathBuf::from("C:\test.vhdx"),
+            4096,
+            2,
+        );
+        
+        // Off VM is not available
+        assert!(!vm.is_available());
+        
+        // Saved VM without agent is available
+        vm.state = VMState::Saved;
+        assert!(vm.is_available());
+        
+        // Saved VM with agent is not available
+        vm.current_agent_id = Some("agent-1".to_string());
+        assert!(!vm.is_available());
+    }
+
+    #[test]
+    fn test_vm_config_builder() {
+        let config = VMConfig::new("my-vm")
+            .template("tmpl-123")
+            .pool("pool-456")
+            .memory_mb(8192)
+            .cpu_count(4)
+            .gpu(true);
+        
+        assert_eq!(config.name, "my-vm");
+        assert_eq!(config.template_id, Some("tmpl-123".to_string()));
+        assert_eq!(config.pool_id, Some("pool-456".to_string()));
+        assert_eq!(config.memory_mb, 8192);
+        assert_eq!(config.cpu_count, 4);
+        assert!(config.gpu_enabled);
+    }
+}
