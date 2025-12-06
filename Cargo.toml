@@ -1,0 +1,19 @@
+[package]
+name = "hcs-sandbox"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_HostComputeSystem",
+    "Win32_System_HostComputeNetwork",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_Storage_Vhd",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
