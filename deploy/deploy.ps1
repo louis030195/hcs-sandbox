@@ -11,16 +11,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Get current IP
 $MyIP = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
 Write-Host "Your IP: $MyIP"
 
-# Create resource group
 Write-Host "Creating resource group: $ResourceGroup in $Location"
 az group create --name $ResourceGroup --location $Location --output none
 
-# Deploy ARM template
-Write-Host "Deploying VM with Hyper-V (takes ~5 min)..."
+Write-Host "Deploying VM with Hyper-V (~5 min)..."
 $DeployOutput = az deployment group create `
     --resource-group $ResourceGroup `
     --template-file "$PSScriptRoot\azuredeploy.json" `
@@ -29,18 +26,13 @@ $DeployOutput = az deployment group create `
     --output json | ConvertFrom-Json
 
 $PublicIP = $DeployOutput.publicIP.value
-$FQDN = $DeployOutput.fqdn.value
 
 Write-Host ""
-Write-Host "=== Deployment Complete ===" -ForegroundColor Green
-Write-Host "VM is rebooting to enable Hyper-V..."
-Write-Host ""
+Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host "Public IP: $PublicIP"
-Write-Host "FQDN: $FQDN"
-Write-Host "RDP: mstsc /v:$PublicIP"
-Write-Host "API: http://${PublicIP}:8080 (after setup)"
+Write-Host "RDP: mstsc /v:$PublicIP (user: hvadmin)"
 Write-Host ""
-Write-Host "=== Next Steps ===" -ForegroundColor Cyan
-Write-Host "1. Wait 2-3 min for reboot"
-Write-Host "2. RDP: mstsc /v:$PublicIP (user: hvadmin)"
-Write-Host "3. Run setup inside VM (copies hvkube + downloads template)"
+Write-Host "After RDP:" -ForegroundColor Cyan
+Write-Host "  1. Copy hvkube.exe to VM"
+Write-Host "  2. Download Win11 VHDX: aka.ms/windev_VM_hyperv"
+Write-Host "  3. hvkube template register ..."
