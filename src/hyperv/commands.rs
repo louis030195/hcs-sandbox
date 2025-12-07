@@ -45,7 +45,7 @@ impl HyperV {
     /// List all VMs
     pub fn list_vms() -> Result<Vec<HyperVInfo>> {
         let output = powershell(
-            r#"Get-VM | Select-Object Name, State, MemoryAssigned, Uptime, Id | ConvertTo-Json -Compress"#,
+            r#"Get-VM | Select-Object Name, State, MemoryAssigned, @{N='Uptime';E={$_.Uptime.ToString()}}, Id | ConvertTo-Json -Compress"#,
         )?;
 
         if output.trim().is_empty() {
@@ -64,7 +64,7 @@ impl HyperV {
     /// Get VM by name
     pub fn get_vm(name: &str) -> Result<Option<HyperVInfo>> {
         let output = powershell(&format!(
-            r#"Get-VM -Name '{}' -ErrorAction SilentlyContinue | Select-Object Name, State, MemoryAssigned, Uptime, Id | ConvertTo-Json -Compress"#,
+            r#"Get-VM -Name '{}' -ErrorAction SilentlyContinue | Select-Object Name, State, MemoryAssigned, @{{N='Uptime';E={{$_.Uptime.ToString()}}}}, Id | ConvertTo-Json -Compress"#,
             escape_ps(name)
         ))?;
 
