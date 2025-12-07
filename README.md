@@ -1,35 +1,56 @@
 # HyperV-Kube
 
-VM orchestrator using Hyper-V Save/Resume for **2-5 second** startup.
+VM orchestrator using Hyper-V Save/Resume for **sub-second** VM startup (~770ms).
 
 ## Requirements
 
-- Windows 10/11 Pro or Server with Hyper-V
-- Run as Administrator
+- Windows 10/11 Pro with Hyper-V enabled
+- Administrator privileges
 
-## Quick Start
+## Build
 
 ```powershell
 cargo build --release
+```
 
-hvkube template register --name win11 --vhdx C:\Templates\win11.vhdx
+## Setup Template
+
+1. Download [Windows 11 Dev VM](https://aka.ms/windev_VM_hyperv) or create your own
+2. Extract the VHDX
+3. Register:
+
+```powershell
+hvkube template register --name win11 --vhdx C:\path\to\win11.vhdx
+```
+
+## Usage
+
+```powershell
 hvkube pool create --name agents --template win11 --count 3
 hvkube pool provision agents --count 3
-hvkube pool prepare agents
+hvkube pool prepare agents  # boots, checkpoints, saves
 
-# Resume VM (~3s)
-hvkube vm resume agents-0
+hvkube vm resume agents-0   # ~770ms
+hvkube vm save agents-0
+hvkube vm reset agents-0    # restore checkpoint
+```
 
-# HTTP API
+## HTTP API
+
+```powershell
 hvkube serve --port 8080
 ```
 
-## API
-
 ```
 POST /api/v1/acquire {"pool_name": "agents"}
-  → {"vm_name": "...", "ip_address": "...", "mcp_endpoint": "http://...:8080/mcp"}
-
 POST /api/v1/vms/:name/release
 POST /api/v1/vms/:name/resume
+```
+
+## With Terminator
+
+Install [terminator](https://github.com/mediar-ai/terminator) in VM, then:
+
+```bash
+npx @mediar-ai/cli mcp exec --url "http://<IP>:8080/mcp" run_command '{"run": "notepad.exe"}'
 ```
