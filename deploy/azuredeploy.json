@@ -1,0 +1,202 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmName": {
+      "type": "string",
+      "defaultValue": "hyperv-kube",
+      "metadata": { "description": "VM name" }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D8s_v3",
+      "allowedValues": [
+        "Standard_D4s_v3",
+        "Standard_D8s_v3",
+        "Standard_D16s_v3",
+        "Standard_E4s_v3",
+        "Standard_E8s_v3"
+      ],
+      "metadata": { "description": "VM size (must support nested virtualization)" }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "hvadmin",
+      "metadata": { "description": "Admin username" }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": { "description": "Admin password" }
+    },
+    "allowedIP": {
+      "type": "string",
+      "defaultValue": "*",
+      "metadata": { "description": "IP allowed to access (your IP or * for any)" }
+    }
+  },
+  "variables": {
+    "location": "[resourceGroup().location]",
+    "vnetName": "[concat(parameters('vmName'), '-vnet')]",
+    "subnetName": "default",
+    "nsgName": "[concat(parameters('vmName'), '-nsg')]",
+    "pipName": "[concat(parameters('vmName'), '-pip')]",
+    "nicName": "[concat(parameters('vmName'), '-nic')]",
+    "vnetPrefix": "10.0.0.0/16",
+    "subnetPrefix": "10.0.0.0/24"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('nsgName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "RDP",
+            "properties": {
+              "priority": 1000,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('allowedIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "3389"
+            }
+          },
+          {
+            "name": "HvKubeAPI",
+            "properties": {
+              "priority": 1001,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "[parameters('allowedIP')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "8080"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('vnetName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "addressSpace": { "addressPrefixes": ["[variables('vnetPrefix')]"] },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]",
+              "networkSecurityGroup": { "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]" }
+            }
+          }
+        ]
+      },
+      "dependsOn": ["[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('pipName')]",
+      "location": "[variables('location')]",
+      "sku": { "name": "Standard" },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": { "domainNameLabel": "[parameters('vmName')]" }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('nicName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": { "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))]" },
+              "subnet": { "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]" }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('vmName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "hardwareProfile": { "vmSize": "[parameters('vmSize')]" },
+        "osProfile": {
+          "computerName": "[parameters('vmName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2022-datacenter-g2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage",
+            "managedDisk": { "storageAccountType": "Premium_LRS" },
+            "diskSizeGB": 256
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [{ "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]" }]
+        }
+      },
+      "dependsOn": ["[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2023-07-01",
+      "name": "[concat(parameters('vmName'), '/SetupHyperV')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "publisher": "Microsoft.Compute",
+        "type": "CustomScriptExtension",
+        "typeHandlerVersion": "1.10",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "commandToExecute": "powershell -ExecutionPolicy Bypass -Command \"Install-WindowsFeature -Name Hyper-V -IncludeManagementTools; New-Item -ItemType Directory -Force -Path C:\\HyperVKube\\Templates, C:\\HyperVKube\\VMs; New-NetFirewallRule -DisplayName 'HvKube API' -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow; Restart-Computer -Force\""
+        }
+      },
+      "dependsOn": ["[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"]
+    }
+  ],
+  "outputs": {
+    "publicIP": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))).ipAddress]"
+    },
+    "fqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))).dnsSettings.fqdn]"
+    },
+    "sshCommand": {
+      "type": "string",
+      "value": "[concat('mstsc /v:', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))).ipAddress)]"
+    },
+    "apiEndpoint": {
+      "type": "string",
+      "value": "[concat('http://', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('pipName'))).ipAddress, ':8080')]"
+    }
+  }
+}
